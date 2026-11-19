@@ -200,7 +200,7 @@ npm run sync:v4 -- data/test_modified.csv
 変更ログの例（更新）：
 
 ```json
-{"at":"2026-11-19T15:18:24.137+09:00","op":"update","key":{"lg_code":"131016","machiaza_id":"0004001","blk_id":"009","rsdt_id":"004","rsdt2_id":""},"changes":{"remarks":[null,"テスト更新"]}}
+{"at":"2026-11-19T15:18:28.618+09:00","op":"update","key":{"lg_code":"131016","machiaza_id":"0004001","blk_id":"009","rsdt_id":"004","rsdt2_id":""},"changes":{"remarks":[null,"テスト更新"]}}
 ```
 
 - 追加は追加した行（`after`）、更新は変わった列の変更前と変更後（`changes`）、削除は削除する前の行（`before`）を残します
