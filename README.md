@@ -20,7 +20,7 @@ npm run import:naive -- --limit 10000
 
 ## 計測結果
 
-計測環境：Windows 11 の WSL2 上の Node.js 22、MySQL 8.4 は Rancher Desktop（Docker）上で実行。
+計測環境：Windows の WSL2 上の Node.js 22、MySQL 8.4 は Rancher Desktop（Docker）上で実行。
 
 | 版 | やり方 | 件数 | 時間 | 速度 | 最大メモリ |
 |---|---|---|---|---|---|
