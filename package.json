@@ -1,0 +1,24 @@
+{
+  "name": "abr-batch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "download": "bash scripts/download.sh",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "import:naive": "tsx src/import-naive.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-mariadb": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@types/node": "22.20.5",
+    "csv-parse": "7.0.3",
+    "dotenv": "18.0.10",
+    "prisma": "7.10.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
