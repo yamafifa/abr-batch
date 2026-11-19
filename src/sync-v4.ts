@@ -8,7 +8,10 @@
  *    - 両方にあって値が違う → 更新
  *    - DB にだけある → 削除
  * 4. 追加・更新は INSERT ... ON DUPLICATE KEY UPDATE、削除は DELETE で、1,000 件ずつ反映する
- * 5. 反映した内容を logs/ に JSON Lines（1 行に 1 件の JSON）を gzip で圧縮して残す（zgrep で探せる）
+ * 5. ログを logs/ に残す
+ *    - batch.log：実行ログ（開始・終了、成功か失敗か、エラー内容）
+ *    - sync-日時.jsonl.gz：変更ログ（追加・更新・削除した行）。gzip 圧縮なので zgrep で探せる
+ *    - sql-日時.jsonl.gz：SQL ログ（実行した SQL、かかった時間、件数）
  *
  * 使い方: npm run sync:v4 -- [--dry-run] [--batch 件数] [--max-delete-ratio 割合] [--force] [CSVのパス]
  *   --dry-run           DB を変えずに、ログだけ出す
@@ -23,7 +26,11 @@ import { resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { parse } from "csv-parse";
+import { logEnd, logStart } from "./lib/batch-log.js";
+import type { Connection } from "mariadb";
 import { createConnection } from "./lib/mariadb.js";
+import { SqlLog } from "./lib/sql-log.js";
+import { nowJst, stampJst } from "./lib/time.js";
 import { report } from "./lib/measure.js";
 import {
   ALL_COLUMNS, KEY_COLUMNS, VALUE_COLUMNS, compareKey, diffValues, keyOf, normalizeCsvRow,
@@ -31,6 +38,8 @@ import {
 } from "./lib/rsdt-columns.js";
 
 const TABLE = "mt_rsdtdsp_rsdt";
+
+type Query = ReturnType<SqlLog["wrap"]>;
 
 // ---- 引数 ----
 const args = process.argv.slice(2);
@@ -129,14 +138,11 @@ const COLS_SQL = ALL_COLUMNS.map((c) => `\`${c}\``).join(", ");
 const ORDER_SQL = KEY_COLUMNS.map((c) => `\`${c}\``).join(", ");
 
 /** DB を主キー順に、pageSize 件ずつ読んで 1 行ずつ返す */
-async function* dbRows(
-  conn: Awaited<ReturnType<typeof createConnection>>,
-  pageSize: number,
-): AsyncGenerator<Row> {
+async function* dbRows(query: Query, pageSize: number): AsyncGenerator<Row> {
   let last: Row | undefined;
   for (;;) {
     const where = last ? keysetWhere(last) : { sql: "1", params: [] };
-    const rows: Row[] = await conn.query(
+    const rows: Row[] = await query(
       `SELECT ${COLS_SQL} FROM ${TABLE} WHERE ${where.sql} ORDER BY ${ORDER_SQL} LIMIT ${pageSize}`,
       where.params,
     );
@@ -148,13 +154,20 @@ async function* dbRows(
 
 // ---- 本体 ----
 
+const BATCH = "sync:v4";
 const startedAt = process.hrtime.bigint();
-const reader = await createConnection({ dateStrings: true });
-const writer = await createConnection();
+const stamp = stampJst();
+const sqlLog = new SqlLog(`logs/sql-${stamp}${dryRun ? "-dryrun" : ""}.jsonl.gz`);
+logStart(BATCH, { file, dryRun, batchSize, sqlLog: sqlLog.path });
+
+// 接続に失敗したときも実行ログに FAILED を残せるよう、接続は try の中で作る
+let readerConn: Connection | undefined;
+let writerConn: Connection | undefined;
+let reader: Query;
+let writer: Query;
 
 // ログは安全装置のチェックを通ってから作る（止めたときに空のログを残さない）
 // gzip で圧縮して書く。全件追加のような大量の変更では、圧縮しないと 1 GB 近くになるため
-const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
 const logPath = `logs/sync-${stamp}${dryRun ? "-dryrun" : ""}.jsonl.gz`;
 let gzip: Gzip | undefined;
 let logFile: WriteStream | undefined;
@@ -162,7 +175,7 @@ let logFile: WriteStream | undefined;
 /** ログをまとめて書く。圧縮が追いつかないときは待つ（メモリに溜めすぎない） */
 async function writeLogs(entries: object[]): Promise<void> {
   if (entries.length === 0) return;
-  const at = new Date().toISOString();
+  const at = nowJst();
   const text = entries.map((e) => JSON.stringify({ at, ...e })).join("\n") + "\n";
   if (!gzip!.write(text)) await once(gzip!, "drain");
 }
@@ -182,7 +195,7 @@ async function flushUpserts(): Promise<void> {
   if (upserts.length === 0) return;
   if (!dryRun) {
     // VALUES() 関数は MySQL 8.0.20 から非推奨なので、行の別名（AS new）で参照する
-    await writer.query(
+    await writer(
       `INSERT INTO ${TABLE} (${COLS_SQL}) VALUES ${upserts.map(() => ROW_PLACEHOLDER).join(", ")}
        AS new ON DUPLICATE KEY UPDATE ${UPSERT_UPDATE_SQL}`,
       upserts.flatMap((u) => ALL_COLUMNS.map((c) => u.row[c])),
@@ -195,7 +208,7 @@ async function flushUpserts(): Promise<void> {
 async function flushDeletes(): Promise<void> {
   if (deletes.length === 0) return;
   if (!dryRun) {
-    await writer.query(
+    await writer(
       `DELETE FROM ${TABLE} WHERE (${ORDER_SQL}) IN (${deletes.map(() => KEY_PLACEHOLDER).join(", ")})`,
       deletes.flatMap((r) => KEY_COLUMNS.map((c) => r[c])),
     );
@@ -205,10 +218,15 @@ async function flushDeletes(): Promise<void> {
 }
 
 try {
+  readerConn = await createConnection({ dateStrings: true });
+  writerConn = await createConnection();
+  reader = sqlLog.wrap(readerConn, "reader");
+  writer = sqlLog.wrap(writerConn, "writer");
+
   // 安全装置：CSV が途中で切れているなどで件数が大きく減っていたら、大量に削除する前に止める
   const { header, rows: csvCount } = await scanCsv(file);
-  const [{ n: dbCountRaw }] = await reader.query(`SELECT COUNT(*) AS n FROM ${TABLE}`);
-  const dbCount = Number(dbCountRaw);
+  const countRows = await reader<{ n: bigint }[]>(`SELECT COUNT(*) AS n FROM ${TABLE}`);
+  const dbCount = Number(countRows[0]?.n ?? 0);
   console.log(`CSV: ${csvCount.toLocaleString()} 件  DB: ${dbCount.toLocaleString()} 件`);
   if (dbCount > 0 && csvCount < dbCount * (1 - maxDeleteRatio) && !force) {
     throw new Error(
@@ -282,13 +300,20 @@ try {
       `更新: ${counts.update.toLocaleString()}  削除: ${counts.delete.toLocaleString()}`,
   );
   await writeLogs([{ op: "summary", dryRun, file, ...counts }]);
-  console.log(`ログ: ${logPath}`);
+  console.log(`変更ログ: ${logPath}`);
+  console.log(`SQL ログ: ${sqlLog.path}`);
+  logEnd(BATCH, "SUCCESS", startedAt, { ...counts, changeLog: logPath });
+} catch (err) {
+  logEnd(BATCH, "FAILED", startedAt, { error: String(err), ...counts, changeLog: gzip ? logPath : undefined });
+  process.exitCode = 1;
+  console.error(err);
 } finally {
   if (gzip && logFile) {
     const closed = once(logFile, "close");
     gzip.end();
     await closed;
   }
-  await reader.end();
-  await writer.end();
+  await sqlLog.close();
+  await readerConn?.end();
+  await writerConn?.end();
 }
