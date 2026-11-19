@@ -8,7 +8,7 @@
  *    - 両方にあって値が違う → 更新
  *    - DB にだけある → 削除
  * 4. 追加・更新は INSERT ... ON DUPLICATE KEY UPDATE、削除は DELETE で、1,000 件ずつ反映する
- * 5. 反映した内容を logs/ に JSON Lines（1 行に 1 件の JSON）で残す
+ * 5. 反映した内容を logs/ に JSON Lines（1 行に 1 件の JSON）を gzip で圧縮して残す（zgrep で探せる）
  *
  * 使い方: npm run sync:v4 -- [--dry-run] [--batch 件数] [--max-delete-ratio 割合] [--force] [CSVのパス]
  *   --dry-run           DB を変えずに、ログだけ出す
@@ -16,7 +16,9 @@
  *   --force             上の安全装置を無視して実行する
  */
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createReadStream, createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { createGzip, type Gzip } from "node:zlib";
 import { resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -151,12 +153,19 @@ const reader = await createConnection({ dateStrings: true });
 const writer = await createConnection();
 
 // ログは安全装置のチェックを通ってから作る（止めたときに空のログを残さない）
+// gzip で圧縮して書く。全件追加のような大量の変更では、圧縮しないと 1 GB 近くになるため
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
-const logPath = `logs/sync-${stamp}${dryRun ? "-dryrun" : ""}.jsonl`;
-let log: WriteStream | undefined;
-const writeLog = (entry: object): void => {
-  log!.write(JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
-};
+const logPath = `logs/sync-${stamp}${dryRun ? "-dryrun" : ""}.jsonl.gz`;
+let gzip: Gzip | undefined;
+let logFile: WriteStream | undefined;
+
+/** ログをまとめて書く。圧縮が追いつかないときは待つ（メモリに溜めすぎない） */
+async function writeLogs(entries: object[]): Promise<void> {
+  if (entries.length === 0) return;
+  const at = new Date().toISOString();
+  const text = entries.map((e) => JSON.stringify({ at, ...e })).join("\n") + "\n";
+  if (!gzip!.write(text)) await once(gzip!, "drain");
+}
 
 const counts = { compared: 0, unchanged: 0, insert: 0, update: 0, delete: 0 };
 
@@ -179,7 +188,7 @@ async function flushUpserts(): Promise<void> {
       upserts.flatMap((u) => ALL_COLUMNS.map((c) => u.row[c])),
     );
   }
-  for (const u of upserts) writeLog(u.log);
+  await writeLogs(upserts.map((u) => u.log));
   upserts = [];
 }
 
@@ -191,7 +200,7 @@ async function flushDeletes(): Promise<void> {
       deletes.flatMap((r) => KEY_COLUMNS.map((c) => r[c])),
     );
   }
-  for (const r of deletes) writeLog({ op: "delete", key: keyOf(r), before: r });
+  await writeLogs(deletes.map((r) => ({ op: "delete", key: keyOf(r), before: r })));
   deletes = [];
 }
 
@@ -209,7 +218,9 @@ try {
   }
 
   mkdirSync("logs", { recursive: true });
-  log = createWriteStream(logPath);
+  gzip = createGzip();
+  logFile = createWriteStream(logPath);
+  gzip.pipe(logFile);
 
   const csvIt = sortedCsvRows(file, header);
   const dbIt = dbRows(reader, batchSize);
@@ -270,10 +281,14 @@ try {
     `変更なし: ${counts.unchanged.toLocaleString()}  追加: ${counts.insert.toLocaleString()}  ` +
       `更新: ${counts.update.toLocaleString()}  削除: ${counts.delete.toLocaleString()}`,
   );
-  writeLog({ op: "summary", dryRun, file, ...counts });
+  await writeLogs([{ op: "summary", dryRun, file, ...counts }]);
   console.log(`ログ: ${logPath}`);
 } finally {
-  if (log) await new Promise((ok) => log!.end(ok));
+  if (gzip && logFile) {
+    const closed = once(logFile, "close");
+    gzip.end();
+    await closed;
+  }
   await reader.end();
   await writer.end();
 }
