@@ -14,17 +14,24 @@
 npm install
 npm run db:up            # MySQL 8.4 を起動（ポート 3307）
 npm run download         # データを data/ にダウンロード
-npx prisma migrate dev   # テーブルを作成
+npx prisma migrate deploy   # テーブルを作成
 npm run import:naive -- --limit 10000
 ```
 
 ## 計測結果
 
-（計測後に記入）
+計測環境：Windows 11 の WSL2 上の Node.js 22、MySQL 8.4 は Rancher Desktop（Docker）上で実行。
 
 | 版 | やり方 | 件数 | 時間 | 速度 | 最大メモリ |
 |---|---|---|---|---|---|
-| v1 | CSV を丸ごと読み込み、1件ずつ INSERT | | | | |
+| v1 | CSV を丸ごと読み込み、1件ずつ INSERT | 1,000 | 23.26 秒 | 43 件/秒 | 1,337 MB |
+| v1 | 同上 | 10,000 | 114.06 秒 | 88 件/秒 | 1,453 MB |
+
+v1 の課題：
+
+- 1件ごとに DB と往復するため、1件あたり約 10 ミリ秒かかる（上の2回の差から計算）
+- CSV（約 150 MB）を丸ごと読み込むため、件数が少なくてもメモリを 1.3 GB 以上使う
+- この速さのまま全件（約 175 万件）を入れると、5 時間ほどかかる計算になる（実測ではない）
 
 ## 技術
 
