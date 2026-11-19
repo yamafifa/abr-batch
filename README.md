@@ -6,12 +6,12 @@
 
 ## 結果のまとめ
 
-東京都の住居表示データ 1,752,573 件を取り込む時間：
+東京都の住居表示データ 1,752,573 件を、空のテーブルに取り込む時間：
 
 | 版 | やり方 | 全件の時間 | 速度 | 最大メモリ |
 |---|---|---|---|---|
 | [v1](src/import-naive.ts) | CSV を丸ごと読み込み、1 件ずつ INSERT | 約 5 時間（計算上） | 88 件/秒 | 1,453 MB |
-| [v2](src/import-v2.ts) | ストリーミング処理 + 1,000 件ずつまとめて INSERT | 約 7 分（415.26 秒） | 4,220 件/秒 | 562 MB |
+| [v2](src/import-v2.ts) | ストリーミング処理 + 1,000 件ずつまとめて INSERT（Prisma） | 約 7 分（415.26 秒） | 4,220 件/秒 | 562 MB |
 | [v3](src/import-v3.ts) | `LOAD DATA LOCAL INFILE` で DB に直接読み込ませる | **約 15 秒（15.11 秒）** | 115,976 件/秒 | 154 MB |
 
 - v1 は全件を測っていません。10,000 件の計測結果からの計算です（[v1](#v1素直に書いた遅い版)を参照）
@@ -22,9 +22,21 @@
 
 | 場面 | 時間 |
 |---|---|
-| 約 6,000 件の差分（全件を比べて、差分だけ反映） | 20.27 秒 |
-| 全件を更新 | 92.58 秒 |
-| 全件を追加（空のテーブルから） | 70.93 秒 |
+| 約 6,000 件の差分（全件を比べて、差分だけ反映） | 20.36 秒 |
+| 全件を更新 | 93.05 秒 |
+| 全件を追加（空のテーブルから） | 66.38 秒 |
+
+## 見どころ
+
+計測と調査で見つけた問題と、その対処です。詳しくは各版の説明にあります。
+
+| 見つけた問題 | 対処 | 版 |
+|---|---|---|
+| 少しずつ読んでいるのに、メモリが 2 GB を超えた。原因は、Prisma のデバッグ用部品が、ログを出さない設定でも直近 100 回分の SQL と引数を取っておく作りだったこと | ヒープスナップショットで原因を特定し、`clearLogs()` で毎回消す | [v2](#v2ストリーミング処理--まとめて-insert) |
+| ファイル全体を 1 回の `LOAD DATA` で送ると、DB に断られる（`max_allowed_packet` を超える） | CSV を行の切れ目で区切って、何回かに分けて送る | [v3](#v3load-data-local-infile) |
+| 配布 CSV の改行が CRLF で、`LOAD DATA` だと最後の列に `\r` が残る | 行の区切りを `'\r\n'` と指定する | [v3](#v3load-data-local-infile) |
+| 配布 CSV が、主キー順に並んでいない（374 か所） | 比べる前に毎回並べ替え、読みながら順番もチェックする | [v4](#v4差分更新load-data-を使えない場面向け) |
+| キーセット方式で `(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなる | `a > ? OR (a = ? AND b > ?) OR ...` に展開する | [v4](#v4差分更新load-data-を使えない場面向け) |
 
 ## 使うデータ
 
@@ -36,7 +48,7 @@
 
 ## 動かし方
 
-必要なもの：Node.js 22、Docker（Docker Compose）、curl、unzip
+必要なもの：Node.js 22、Docker（Docker Compose）、curl、unzip、sort
 
 ```bash
 npm install
@@ -61,6 +73,20 @@ npm run sync:v4 -- data/test_modified.csv
 - v2：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 - v3：`--chunk-mb 大きさ`（1 回の LOAD DATA で送る大きさ、既定 4 MB）
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
+
+## ファイル構成
+
+| ファイル | 内容 |
+|---|---|
+| [src/import-naive.ts](src/import-naive.ts) | v1：素直に書いた遅い版 |
+| [src/import-v2.ts](src/import-v2.ts) | v2：ストリーミング処理 + まとめて INSERT（Prisma） |
+| [src/import-v3.ts](src/import-v3.ts) | v3：LOAD DATA LOCAL INFILE（mariadb ドライバー） |
+| [src/sync-v4.ts](src/sync-v4.ts) | v4：差分更新（mariadb ドライバー） |
+| [src/lib/](src/lib/) | 共通部品（DB 接続、列の定義、計測、実行ログ、SQL ログ、日本時間） |
+| [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
+| [scripts/download.sh](scripts/download.sh) | データのダウンロード |
+| [scripts/make-test-csv.sh](scripts/make-test-csv.sh) | v4 の確認用 CSV を作る |
+| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定） |
 
 ## 計測環境
 
@@ -129,7 +155,7 @@ npm run sync:v4 -- data/test_modified.csv
 [src/import-v3.ts](src/import-v3.ts)
 
 - MySQL の `LOAD DATA LOCAL INFILE` で、CSV を DB に直接読み込ませます。1 行ずつの SQL を組み立てないので、v2 の約 27 倍の速さです
-- Prisma は `LOAD DATA LOCAL` に対応していないので、v3 だけ mariadb ドライバーを直接使います
+- Prisma は `LOAD DATA LOCAL` に対応していないので、mariadb ドライバーを直接使います
 - 空文字は `NULLIF` で NULL に変えて、v1・v2 と同じ結果になるようにしています
 
 #### 見つけた問題 1：改行コード
@@ -174,63 +200,12 @@ npm run sync:v4 -- data/test_modified.csv
    - 両方にあって値が違う行 → 更新
    - DB にだけある行 → 削除
 4. 追加と更新は `INSERT ... ON DUPLICATE KEY UPDATE`、削除は `DELETE ... WHERE (主キー) IN (...)` で、1,000 件ずつ反映する
-5. ログを `logs/` に残す（下の「ログ」を参照）
+5. 実行ログ・変更ログ・SQL ログを `logs/` に残す（下の「ログ」を参照）
 
-#### ログ
-
-ログは `logs/` に 3 種類出します。時刻とファイル名は日本時間です。
-
-| ログ | ファイル | 中身 |
-|---|---|---|
-| 実行ログ | `batch.log`（追記） | 開始と終了を 1 行ずつ。引数、成功か失敗か、処理時間、件数、エラー内容 |
-| 変更ログ | `sync-日時.jsonl.gz` | 追加・更新・削除した行（1 行に 1 件の JSON、gzip 圧縮） |
-| SQL ログ | `sql-日時.jsonl.gz` | 実行した SQL、かかった時間、件数（1 文に 1 行、gzip 圧縮） |
-
-実行ログの例（成功と、安全装置で止まったとき）：
-
-```
-2026-11-19T15:18:22.769+09:00 [START] batch="sync:v4" pid=35544 args="data/test_modified.csv" file="/path/to/abr-batch/data/test_modified.csv" dryRun=false batchSize=1000 sqlLog="logs/sql-20261119-151822.jsonl.gz"
-2026-11-19T15:18:43.659+09:00 [END] batch="sync:v4" pid=35544 status="SUCCESS" sec=20.89 compared=1750821 unchanged=1747316 insert=927 update=3505 delete=1752 changeLog="logs/sync-20261119-151822.jsonl.gz"
-2026-11-19T15:19:05.855+09:00 [END] batch="sync:v4" pid=35684 status="FAILED" sec=0.27 error="Error: CSV の件数が DB より 10% 以上少ないので止めました。…" compared=0 unchanged=0 insert=0 update=0 delete=0
-```
-
-- 異常終了しても残るよう、同期書き込みで追記します
-- DB に接続できなかったときも `FAILED` とエラー内容が残ります。失敗したときの終了コードは 1 です
-
-変更ログの例（更新）：
-
-```json
-{"at":"2026-11-19T15:18:28.618+09:00","op":"update","key":{"lg_code":"131016","machiaza_id":"0004001","blk_id":"009","rsdt_id":"004","rsdt2_id":""},"changes":{"remarks":[null,"テスト更新"]}}
-```
-
-- 追加は追加した行（`after`）、更新は変わった列の変更前と変更後（`changes`）、削除は削除する前の行（`before`）を残します
-- 最後の行に、件数のまとめ（`summary`）を書きます
-
-SQL ログの例（DELETE）：
-
-```json
-{"at":"2026-11-19T15:18:35.303+09:00","conn":"writer","ms":93.8,"affectedRows":1000,"params":5000,"sql":"DELETE FROM mt_rsdtdsp_rsdt WHERE (`lg_code`, `machiaza_id`, `blk_id`, `rsdt_id`, `rsdt2_id`) IN ((?, ?, ?, ?, ?) ×1000)"}
-```
-
-- 引数の値は書きません。1 回で最大 22,000 個になり、ログが巨大になるためです。値は変更ログに残っています
-- 同じ形のプレースホルダーの並びは `(?, ?, ?, ?, ?) ×1000` のように縮めて書きます
-- `INSERT ... ON DUPLICATE KEY UPDATE` の `affectedRows` は、MySQL の仕様で追加 1 件を 1、更新 1 件を 2 と数えます（例：1,000 件のうち 791 件が更新なら 1,791）
-- 約 6,000 件の差分を反映したときの SQL ログは 1,761 行（SELECT 1,754 回、INSERT 5 回、DELETE 2 回）、15 KB でした。SQL の実行時間の合計は約 5 秒で、全体（約 21 秒）の残りは CSV の並べ替えと比較の時間です
-
-ログは圧縮してあるので、`zgrep` や `zcat` で探せます。
-
-```bash
-grep FAILED logs/batch.log                                # 失敗した実行
-zgrep -c '"op":"delete"' logs/sync-*.jsonl.gz              # 削除した件数
-zgrep '"oaza_cho":"九段南"' logs/sync-*.jsonl.gz            # 特定の住所の変更を探す
-zcat logs/sync-20261119-151822.jsonl.gz | tail -1          # 件数のまとめ
-zgrep '"error"' logs/sql-*.jsonl.gz                       # 失敗した SQL
-```
-
-安全装置：
+#### 安全装置
 
 - `--dry-run` を付けると、DB を変えずにログだけ出します
-- CSV の件数が DB より 10% 以上少ないときは、何もせずに止めます。CSV が途中で切れていたときに、大量に削除してしまわないためです
+- CSV の件数が DB より 10% 以上少ないときは、何もせずに止めます。CSV が途中で切れていたときに、大量に削除してしまわないためです（`--max-delete-ratio` で割合を変えられます。CSV が正しいと確かめたうえで、`--force` で無視することもできます）
 
 #### 見つけた問題 1：配布 CSV は主キー順に並んでいない
 
@@ -261,22 +236,75 @@ OR に展開した書き方を使っています。
 | もう一度 v4 を実行 | 変更 0 件 |
 | 元の CSV で v4 を実行 | 元のチェックサム（967527444）に戻る |
 | 先頭 10 万行だけの CSV | 安全装置で止まり、DB は変わらない |
+| DB に接続できない | 実行ログに `FAILED` とエラー内容が残り、終了コードが 1 になる |
 
 #### 計測結果（全件 1,752,573 件）
 
-| 場面 | 時間 | 速度 | 最大メモリ | ログ（gzip 圧縮後） |
-|---|---|---|---|---|
-| 変更なし（比べるだけ、`--dry-run`） | 19.97 秒 | 87,754 件/秒 | 166 MB | 1 行（まとめのみ） |
-| 約 6,000 件の差分（上の確認用 CSV） | 20.27 秒 | 86,508 件/秒 | 174 MB | 96 KB |
-| 全件を更新 | 92.58 秒 | 18,931 件/秒 | 207 MB | 6.3 MB |
-| 全件を追加（空のテーブルから） | 70.93 秒 | 24,710 件/秒 | 213 MB | 20 MB |
+| 場面 | 時間 | 速度 | 最大メモリ | 変更ログ | SQL ログ |
+|---|---|---|---|---|---|
+| 変更なし（比べるだけ、`--dry-run`） | 20.37 秒 | 86,029 件/秒 | 168 MB | まとめの 1 行のみ | 1,754 行、14 KB |
+| 約 6,000 件の差分（上の確認用 CSV） | 20.36 秒 | 86,111 件/秒 | 170 MB | 97 KB | 1,761 行、16 KB |
+| 全件を更新 | 93.05 秒 | 18,835 件/秒 | 198 MB | 6.3 MB | 3,507 行、38 KB |
+| 全件を追加（空のテーブルから） | 66.38 秒 | 26,400 件/秒 | 222 MB | 20 MB | 1,755 行、20 KB |
 
+- ログの大きさは gzip 圧縮後の値です
 - 差分が少なければ、全件を比べても約 20 秒で終わります
 - 全件を追加する場面でも約 1 分でした。同じ 1,000 件ずつの INSERT でも、Prisma の `createMany` を使った v2（約 7 分）よりずっと速く、Prisma の処理の重さが分かります
+- 約 6,000 件の差分のとき、SQL の実行時間の合計は約 5 秒でした。全体（約 20 秒）の残りは、CSV の並べ替えと比較の時間です（SQL ログの `ms` を合計して確認）
+
+#### ログ
+
+ログは `logs/` に 3 種類出します。時刻とファイル名は日本時間です。
+
+| ログ | ファイル | 中身 |
+|---|---|---|
+| 実行ログ | `batch.log`（追記） | 開始と終了を 1 行ずつ。引数、成功か失敗か、処理時間、件数、エラー内容 |
+| 変更ログ | `sync-日時.jsonl.gz` | 追加・更新・削除した行（1 行に 1 件の JSON、gzip 圧縮） |
+| SQL ログ | `sql-日時.jsonl.gz` | 実行した SQL、かかった時間、件数（1 文に 1 行、gzip 圧縮） |
+
+実行ログの例（成功と、安全装置で止まったとき。`file` のパスは置き換えています）：
+
+```
+2026-11-19T15:18:22.769+09:00 [START] batch="sync:v4" pid=35544 args="data/test_modified.csv" file="/path/to/abr-batch/data/test_modified.csv" dryRun=false batchSize=1000 sqlLog="logs/sql-20261119-151822.jsonl.gz"
+2026-11-19T15:18:43.659+09:00 [END] batch="sync:v4" pid=35544 status="SUCCESS" sec=20.89 compared=1750821 unchanged=1747316 insert=927 update=3505 delete=1752 changeLog="logs/sync-20261119-151822.jsonl.gz"
+2026-11-19T15:19:05.855+09:00 [END] batch="sync:v4" pid=35684 status="FAILED" sec=0.27 error="Error: CSV の件数が DB より 10% 以上少ないので止めました。…" compared=0 unchanged=0 insert=0 update=0 delete=0
+```
+
+- 異常終了しても残るよう、同期書き込みで追記します
+- DB に接続できなかったときも `FAILED` とエラー内容が残ります。失敗したときの終了コードは 1 なので、cron などから実行したときに失敗を検知できます
+
+変更ログの例（更新）：
+
+```json
+{"at":"2026-11-19T15:18:28.618+09:00","op":"update","key":{"lg_code":"131016","machiaza_id":"0004001","blk_id":"009","rsdt_id":"004","rsdt2_id":""},"changes":{"remarks":[null,"テスト更新"]}}
+```
+
+- 追加は追加した行（`after`）、更新は変わった列の変更前と変更後（`changes`）、削除は削除する前の行（`before`）を残します
+- 最後の行に、件数のまとめ（`summary`）を書きます
+
+SQL ログの例（DELETE）：
+
+```json
+{"at":"2026-11-19T15:18:35.303+09:00","conn":"writer","ms":93.8,"affectedRows":1000,"params":5000,"sql":"DELETE FROM mt_rsdtdsp_rsdt WHERE (`lg_code`, `machiaza_id`, `blk_id`, `rsdt_id`, `rsdt2_id`) IN ((?, ?, ?, ?, ?) ×1000)"}
+```
+
+- 引数の値は書きません。1 回で最大 22,000 個になり、ログが巨大になるためです。値は変更ログに残っています
+- 同じ形のプレースホルダーの並びは `(?, ?, ?, ?, ?) ×1000` のように縮めて書きます
+- `INSERT ... ON DUPLICATE KEY UPDATE` の `affectedRows` は、MySQL の仕様で追加 1 件を 1、更新 1 件を 2 と数えます（例：1,000 件のうち 791 件が更新なら 1,791）
+
+ログは圧縮してあるので、`zgrep` や `zcat` で探せます。
+
+```bash
+grep FAILED logs/batch.log                                # 失敗した実行
+zgrep -c '"op":"delete"' logs/sync-*.jsonl.gz              # 削除した件数
+zgrep '"oaza_cho":"九段南"' logs/sync-*.jsonl.gz            # 特定の住所の変更を探す
+zcat logs/sync-20261119-151822.jsonl.gz | tail -1          # 件数のまとめ
+zgrep '"error"' logs/sql-*.jsonl.gz                       # 失敗した SQL
+```
 
 #### ログの圧縮
 
-最初はログを圧縮せずに書いていましたが、変更が大量にあるとログが大きくなりすぎたので、gzip で圧縮するようにしました。
+最初は変更ログを圧縮せずに書いていましたが、変更が大量にあるとログが大きくなりすぎたので、gzip で圧縮するようにしました（SQL ログを入れる前のコードで比べた値です）。
 
 | 場面 | 圧縮前 | 圧縮後 | 時間（圧縮前 → 圧縮後） |
 |---|---|---|---|
