@@ -6,7 +6,8 @@ services:
       MYSQL_USER: abr
       MYSQL_PASSWORD: abr
       MYSQL_ROOT_PASSWORD: root
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    # local-infile：v3 の LOAD DATA LOCAL INFILE（手元のCSVをDBに直接読み込ませる）用
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--local-infile=1"]
     ports:
       - "3307:3306"
     volumes:

@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "import:naive": "tsx src/import-naive.ts",
-    "import:v2": "tsx src/import-v2.ts"
+    "import:v2": "tsx src/import-v2.ts",
+    "import:v3": "tsx src/import-v3.ts"
   },
   "dependencies": {
     "@prisma/adapter-mariadb": "7.10.1",
@@ -19,6 +20,7 @@
     "@types/node": "22.20.5",
     "csv-parse": "7.0.3",
     "dotenv": "18.0.10",
+    "mariadb": "3.5.4",
     "prisma": "7.10.1",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
