@@ -88,6 +88,8 @@ npm run sync:v4 -- data/test_modified.csv
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
 - v5：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 
+DB のパスワードについて：[compose.yaml](compose.yaml) と `.env.example` に書いてあるパスワード（`abr`、`root`）は、手元で試すための決め打ちの値です。MySQL は手元の PC からだけ接続できるようにしてあります（`127.0.0.1:3307`）。本番や共有の DB には使わないでください。
+
 DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_sha2_password`）では、MySQL を起動し直した直後の最初のログインに、暗号化した通信（TLS）かサーバーの公開鍵が必要です。このリポジトリでは TLS を使わないので、接続設定で `allowPublicKeyRetrieval: true`（公開鍵をサーバーから受け取る）を指定しています（[src/lib/db.ts](src/lib/db.ts)、[src/lib/mariadb.ts](src/lib/mariadb.ts)）。手元の Docker の DB に接続する前提の設定です。
 
 ## ファイル構成
@@ -103,7 +105,7 @@ DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_s
 | [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
 | [scripts/download.sh](scripts/download.sh) | データのダウンロード |
 | [scripts/make-test-csv.sh](scripts/make-test-csv.sh) | v4 の確認用 CSV を作る |
-| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定） |
+| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定、手元の PC からだけ接続できるようにポートを `127.0.0.1` に限定） |
 | [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)・[v5](docs/v5-query.md)）と[ログの説明](docs/logs.md) |
 
 ## 技術
