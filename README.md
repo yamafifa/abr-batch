@@ -60,7 +60,7 @@ v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探�
 
 ## 動かし方
 
-必要なもの：Node.js 22、Docker（Docker Compose）、curl、unzip、sort
+必要なもの：Node.js 22 以降（26.13.1 でも動くことを確かめた）、Docker（Docker Compose）、curl、unzip、sort
 
 ```bash
 npm install
@@ -110,7 +110,7 @@ DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_s
 
 ## 技術
 
-TypeScript / Node.js 22 / Prisma 7 / mariadb（Node.js 用の MySQL ドライバー）/ MySQL 8.4 / Docker
+TypeScript / Node.js 22 以降 / Prisma 7 / mariadb（Node.js 用の MySQL ドライバー）/ MySQL 8.4 / Docker
 
 ## 出典・ライセンス
 
