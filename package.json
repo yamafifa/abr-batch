@@ -12,6 +12,7 @@
     "import:naive": "tsx src/import-naive.ts",
     "import:v2": "tsx src/import-v2.ts",
     "import:v3": "tsx src/import-v3.ts",
+    "import:v5": "tsx src/import-v5.ts",
     "sync:v4": "tsx src/sync-v4.ts"
   },
   "dependencies": {

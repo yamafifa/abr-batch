@@ -3,6 +3,7 @@
 デジタル庁の「アドレス・ベース・レジストリ」（住所の公式データ）を MySQL に取り込むバッチです。
 素直に書いた遅い版から始めて、計測しながら段階的に速くしていった過程を残しています。
 後半の v4 では、`LOAD DATA` を使えない場面を想定して、CSV と DB の差分だけを反映する差分更新を作りました。
+v5 では、v2 が遅い原因を確かめるため、v2 の INSERT の部分だけを Prisma を使わない形に変えました。
 
 ## 結果のまとめ
 
@@ -12,11 +13,13 @@
 |---|---|---|---|---|
 | [v1](docs/v1-naive.md) | CSV を丸ごと読み込み、1 件ずつ INSERT | 約 5 時間（計算上） | 88 件/秒 | 1,453 MB |
 | [v2](docs/v2-stream.md) | ストリーミング処理 + 1,000 件ずつまとめて INSERT（Prisma） | 約 7 分（415.26 秒） | 4,220 件/秒 | 562 MB |
+| [v5](docs/v5-query.md) | v2 と同じ流れで、Prisma を使わず mariadb ドライバーの `query` で INSERT | 約 51 秒（50.97 秒） | 34,383 件/秒 | 136 MB |
 | [v3](docs/v3-load-data.md) | `LOAD DATA LOCAL INFILE` で DB に直接読み込ませる | **約 15 秒（15.11 秒）** | 115,976 件/秒 | 154 MB |
 
 - v1 は全件を測っていません。10,000 件の計測結果からの計算です（[v1 の説明](docs/v1-naive.md)を参照）
-- v2 は Node.js のヒープ上限を 512 MB にして測った値です
-- v2 と v3 で取り込んだテーブルは、`CHECKSUM TABLE`（テーブルの中身から計算する値）が同じ値（967527444）になり、中身が一致することを確かめています
+- v2 と v5 は Node.js のヒープ上限を 512 MB にして測った値です
+- v5 は v4 の後に作ったので番号が後ですが、v2 と比べやすいよう v2 の次に並べています
+- v2・v3・v5 で取り込んだテーブルは、`CHECKSUM TABLE`（テーブルの中身から計算する値）が同じ値（967527444）になり、中身が一致することを確かめています
 
 既存のテーブルに差分だけを反映する [v4](docs/v4-sync.md)（`INSERT ... ON DUPLICATE KEY UPDATE`、1,000 件ずつ）：
 
@@ -45,6 +48,7 @@ v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探�
 | 配布 CSV の改行が CRLF で、`LOAD DATA` だと最後の列に `\r` が残る | 行の区切りを `'\r\n'` と指定する | [v3](docs/v3-load-data.md) |
 | 配布 CSV が、主キー順に並んでいない（374 か所） | 比べる前に毎回並べ替え、読みながら順番もチェックする | [v4](docs/v4-sync.md) |
 | キーセット方式で `(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなる | `a > ? OR (a = ? AND b > ?) OR ...` に展開する | [v4](docs/v4-sync.md) |
+| v2 と v5 は同じ 1,000 件ずつの INSERT だが、v2 は約 8 倍遅い。MySQL の中の時間はほぼ同じで、差のほとんどは Node.js 側（Prisma の処理）にあった | performance_schema で MySQL の中と外の時間を切り分け、Prisma を使わず `query` で送る v5 で確かめる | [v5](docs/v5-query.md) |
 
 ## 使うデータ
 
@@ -69,6 +73,7 @@ npx prisma migrate deploy   # テーブルを作る
 npm run import:naive -- --limit 10000   # v1（遅いので件数を区切って試す）
 npm run import:v2                       # v2（全件）
 npm run import:v3                       # v3（全件）
+npm run import:v5                       # v5（全件）
 
 npm run sync:v4 -- --dry-run            # v4（差分を調べてログだけ出す）
 npm run sync:v4                         # v4（差分を反映する）
@@ -81,6 +86,7 @@ npm run sync:v4 -- data/test_modified.csv
 - v2：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 - v3：`--chunk-mb 大きさ`（1 回の LOAD DATA で送る大きさ、既定 4 MB）
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
+- v5：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 
 DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_sha2_password`）では、MySQL を起動し直した直後の最初のログインに、暗号化した通信（TLS）かサーバーの公開鍵が必要です。このリポジトリでは TLS を使わないので、接続設定で `allowPublicKeyRetrieval: true`（公開鍵をサーバーから受け取る）を指定しています（[src/lib/db.ts](src/lib/db.ts)、[src/lib/mariadb.ts](src/lib/mariadb.ts)）。手元の Docker の DB に接続する前提の設定です。
 
@@ -92,12 +98,13 @@ DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_s
 | [src/import-v2.ts](src/import-v2.ts) | v2：ストリーミング処理 + まとめて INSERT（Prisma） |
 | [src/import-v3.ts](src/import-v3.ts) | v3：LOAD DATA LOCAL INFILE（mariadb ドライバー） |
 | [src/sync-v4.ts](src/sync-v4.ts) | v4：差分更新（mariadb ドライバー） |
+| [src/import-v5.ts](src/import-v5.ts) | v5：ストリーミング処理 + まとめて INSERT（mariadb ドライバーの `query`） |
 | [src/lib/](src/lib/) | 共通部品（DB 接続、列の定義、計測、実行ログ、SQL ログ、日本時間） |
 | [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
 | [scripts/download.sh](scripts/download.sh) | データのダウンロード |
 | [scripts/make-test-csv.sh](scripts/make-test-csv.sh) | v4 の確認用 CSV を作る |
 | [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定） |
-| [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)）と[ログの説明](docs/logs.md) |
+| [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)・[v5](docs/v5-query.md)）と[ログの説明](docs/logs.md) |
 
 ## 技術
 
