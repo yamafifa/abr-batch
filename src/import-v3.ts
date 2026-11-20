@@ -14,7 +14,7 @@ import "dotenv/config";
 import { createReadStream } from "node:fs";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
-import mariadb from "mariadb";
+import { createConnection } from "./lib/mariadb.js";
 import { report } from "./lib/measure.js";
 
 const args = process.argv.slice(2);
@@ -27,17 +27,10 @@ const file = resolve(
   args.find((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--")) ??
     "data/mt_rsdtdsp_rsdt_pref13.csv",
 );
-const url = new URL(process.env["DATABASE_URL"] ?? "");
-
 // 次の LOAD DATA で送るデータ。infileStreamFactory から読まれる
 let pending: Buffer = Buffer.alloc(0);
 
-const conn = await mariadb.createConnection({
-  host: url.hostname,
-  port: Number(url.port || 3306),
-  user: decodeURIComponent(url.username),
-  password: decodeURIComponent(url.password),
-  database: url.pathname.replace(/^\//, ""),
+const conn = await createConnection({
   permitLocalInfile: true,
   infileStreamFactory: () => Readable.from([pending]),
 });

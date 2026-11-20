@@ -74,6 +74,8 @@ npm run sync:v4 -- data/test_modified.csv
 - v3：`--chunk-mb 大きさ`（1 回の LOAD DATA で送る大きさ、既定 4 MB）
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
 
+DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_sha2_password`）では、MySQL を起動し直した直後の最初のログインに、暗号化した通信（TLS）かサーバーの公開鍵が必要です。このリポジトリでは TLS を使わないので、接続設定で `allowPublicKeyRetrieval: true`（公開鍵をサーバーから受け取る）を指定しています（[src/lib/db.ts](src/lib/db.ts)、[src/lib/mariadb.ts](src/lib/mariadb.ts)）。手元の Docker の DB に接続する前提の設定です。
+
 ## ファイル構成
 
 | ファイル | 内容 |
