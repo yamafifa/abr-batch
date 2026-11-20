@@ -48,7 +48,7 @@ v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探�
 | 配布 CSV の改行が CRLF で、`LOAD DATA` だと最後の列に `\r` が残る | 行の区切りを `'\r\n'` と指定する | [v3](docs/v3-load-data.md) |
 | 配布 CSV が、主キー順に並んでいない（374 か所） | 比べる前に毎回並べ替え、読みながら順番もチェックする | [v4](docs/v4-sync.md) |
 | キーセット方式で `(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなる | `a > ? OR (a = ? AND b > ?) OR ...` に展開する | [v4](docs/v4-sync.md) |
-| v2 と v5 は同じ 1,000 件ずつの INSERT だが、v2 は約 8 倍遅い。MySQL の中の時間はほぼ同じで、差のほとんどは Node.js 側（Prisma の処理）にあった | performance_schema で MySQL の中と外の時間を切り分け、Prisma を使わず `query` で送る v5 で確かめる | [v5](docs/v5-query.md) |
+| v2 と v5 は同じ 1,000 件ずつの INSERT だが、v2 は約 8 倍遅い。原因は、`createMany` のたびに Prisma が 1,000 件分のデータを含む大きな JSON から SQL の組み立て手順を作り直していたこと（`createMany` ではキャッシュされない） | performance_schema で MySQL の中と外の時間を切り分け、CPU プロファイルで Prisma の中の原因を特定。Prisma を使わず `query` で送る v5 で確かめる | [v5](docs/v5-query.md) |
 
 ## 使うデータ
 
