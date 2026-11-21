@@ -100,7 +100,7 @@ Elasticsearch の wildcard 型は文字をそのまま比べます。そこで�
 
 ただし、**CJK 互換漢字（U+F900〜U+FAFF など）にはかけません**。NFKC・NFD は互換漢字の「塚」（U+FA10）を普通の「塚」（U+585A）に変えます。しかし、MySQL はこの 2 つを別の文字として扱うので、そろえると件数が合わなくなりました（「塚」で MySQL 14,912 件・4,036 件、Elasticsearch は両方 18,948 件）。
 
-AP（abr-web-rails・abr-web-laravel・abr-web-symfony・abr-web-spring）にも同じ処理（`RsdtFold`）があります。**直すときはすべてを直します。** DB にある検索対象の値すべて（1,159 種類）で、5 つの処理の結果が同じになることを確かめました。
+AP（abr-web-rails・abr-web-laravel・abr-web-symfony・abr-web-spring の `RsdtFold`、abr-web-ts の `fold.ts`）にも同じ処理があります。**直すときはすべてを直します。** DB にある検索対象の値すべて（1,159 種類）で、5 つの処理の結果が同じになることを確かめました（TS 版は abr-batch と同じ中身です）。
 
 ### 確かめ方
 

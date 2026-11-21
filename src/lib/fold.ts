@@ -11,7 +11,7 @@
  * CJK 互換漢字（例：U+FA10 の「塚」）は、そのまま残す。NFKC・NFD は U+585A の「塚」に変えてしまうが、
  * MySQL はこの 2 つを別の文字として扱うため
  *
- * AP（abr-web-rails の RsdtFold、abr-web-laravel・abr-web-symfony の App\Support\RsdtFold、abr-web-spring の RsdtFold.java）にも同じ処理がある。直すときはすべてを直す
+ * AP（abr-web-rails の RsdtFold、abr-web-laravel・abr-web-symfony の App\Support\RsdtFold、abr-web-spring の RsdtFold.java、abr-web-ts の src/infrastructure/elasticsearch/fold.ts）にも同じ処理がある。直すときはすべてを直す
  */
 const SMALL_TO_LARGE: Record<string, string> = {
   "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お", "っ": "つ",
