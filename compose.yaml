@@ -20,5 +20,35 @@ services:
       timeout: 3s
       retries: 30
 
+  # Elasticsearch（全文検索のサーバー）：AP からの住所検索を速くするため
+  es:
+    image: elasticsearch:9.5.5
+    environment:
+      discovery.type: single-node
+      # 手元専用なのでログインを無くす（127.0.0.1 からだけ接続できる）
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  # Kibana（Elasticsearch の管理画面）：ブラウザで http://127.0.0.1:5601
+  kibana:
+    image: kibana:9.5.5
+    environment:
+      ELASTICSEARCH_HOSTS: http://es:9200
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      es:
+        condition: service_healthy
+
 volumes:
   db-data:
+  es-data:

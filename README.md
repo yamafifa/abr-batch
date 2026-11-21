@@ -4,6 +4,7 @@
 素直に書いた遅い版から始めて、計測しながら段階的に速くしていった過程を残しています。
 後半の v4 では、`LOAD DATA` を使えない場面を想定して、CSV と DB の差分だけを反映する差分更新を作りました。
 v5 では、v2 が遅い原因を確かめるため、v2 の INSERT の部分だけを Prisma を使わない形に変えました。
+最後に、AP（Web アプリ）からの部分一致の検索を速くするため、DB のデータを Elasticsearch に入れる変換バッチ（es:index）を作りました。
 
 ## 結果のまとめ
 
@@ -30,6 +31,8 @@ v5 では、v2 が遅い原因を確かめるため、v2 の INSERT の部分だ
 | 全件を追加（空のテーブルから） | 66.38 秒 |
 
 v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探し方は [docs/logs.md](docs/logs.md) にあります。
+
+DB から Elasticsearch の検索用インデックスを作り直す [es:index](docs/es-index.md)（5,000 件ずつ Bulk API で送る）：全件 1,752,573 件で約 57 秒（56.81 秒）、最大メモリ 370 MB。
 
 ## 計測環境
 
@@ -79,7 +82,11 @@ npm run sync:v4 -- --dry-run            # v4（差分を調べてログだけ出
 npm run sync:v4                         # v4（差分を反映する）
 bash scripts/make-test-csv.sh           # v4 の確認用に、一部を変えた CSV を作る
 npm run sync:v4 -- data/test_modified.csv
+
+npm run es:index                        # DB から Elasticsearch のインデックスを作り直す
 ```
+
+- `npm run db:up` で、MySQL と一緒に Elasticsearch 9.5.5（`127.0.0.1:9200`）と Kibana 9.5.5（`127.0.0.1:5601`、管理画面）も起動します。Elasticsearch は手元専用なので、ログインを無くしています
 
 オプション：
 
@@ -87,6 +94,7 @@ npm run sync:v4 -- data/test_modified.csv
 - v3：`--chunk-mb 大きさ`（1 回の LOAD DATA で送る大きさ、既定 4 MB）
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
 - v5：`--batch 件数`（1 回にまとめる件数、既定 1,000）
+- es:index：`--batch 件数`（1 回の Bulk API で送る件数、既定 5,000）
 
 DB のパスワードについて：[compose.yaml](compose.yaml) と `.env.example` に書いてあるパスワード（`abr`、`root`）は、手元で試すための決め打ちの値です。MySQL は手元の PC からだけ接続できるようにしてあります（`127.0.0.1:3307`）。本番や共有の DB には使わないでください。
 
@@ -101,16 +109,17 @@ DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_s
 | [src/import-v3.ts](src/import-v3.ts) | v3：LOAD DATA LOCAL INFILE（mariadb ドライバー） |
 | [src/sync-v4.ts](src/sync-v4.ts) | v4：差分更新（mariadb ドライバー） |
 | [src/import-v5.ts](src/import-v5.ts) | v5：ストリーミング処理 + まとめて INSERT（mariadb ドライバーの `query`） |
-| [src/lib/](src/lib/) | 共通部品（DB 接続、列の定義、計測、実行ログ、SQL ログ、日本時間） |
+| [src/es-index.ts](src/es-index.ts) | es:index：DB から Elasticsearch の検索用インデックスを作り直す |
+| [src/lib/](src/lib/) | 共通部品（DB 接続、Elasticsearch の呼び出し、検索用の文字そろえ、列の定義、計測、実行ログ、SQL ログ、日本時間） |
 | [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
 | [scripts/download.sh](scripts/download.sh) | データのダウンロード |
 | [scripts/make-test-csv.sh](scripts/make-test-csv.sh) | v4 の確認用 CSV を作る |
-| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定、手元の PC からだけ接続できるようにポートを `127.0.0.1` に限定） |
-| [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)・[v5](docs/v5-query.md)）と[ログの説明](docs/logs.md) |
+| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定）、Elasticsearch 9.5.5、Kibana 9.5.5。どれも手元の PC からだけ接続できるようにポートを `127.0.0.1` に限定 |
+| [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)・[v5](docs/v5-query.md)・[es:index](docs/es-index.md)）と[ログの説明](docs/logs.md) |
 
 ## 技術
 
-TypeScript / Node.js 22 以降 / Prisma 7 / mariadb（Node.js 用の MySQL ドライバー）/ MySQL 8.4 / Docker
+TypeScript / Node.js 22 以降 / Prisma 7 / mariadb（Node.js 用の MySQL ドライバー）/ MySQL 8.4 / Elasticsearch 9.5 / Docker
 
 ## 出典・ライセンス
 
