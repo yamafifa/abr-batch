@@ -1,28 +1,36 @@
 # abr-batch
 
-デジタル庁の「アドレス・ベース・レジストリ」（住所の公式データ）を MySQL に取り込むバッチです。
-素直に書いた遅い版から始めて、計測しながら段階的に速くしていった過程を残しています。
-後半の v4 では、`LOAD DATA` を使えない場面を想定して、CSV と DB の差分だけを反映する差分更新を作りました。
-v5 では、v2 が遅い原因を確かめるため、v2 の INSERT の部分だけを Prisma を使わない形に変えました。
-最後に、AP（Web アプリ）からの部分一致の検索を速くするため、DB のデータを Elasticsearch に入れる変換バッチ（es:index）を作りました。
+大容量のデータを DB に入れる・更新する・検索するときに、何に気を付けるとよいかを実測で確かめたリポジトリです。
+開発のときに参考にできるよう、素直に書いた遅い版から順に作り、計測と原因調査の結果を残しています。
 
-## 結果のまとめ
+使うデータは、デジタル庁の「アドレス・ベース・レジストリ」（住所の公式データ）のうち、東京都の住居表示データ 1,752,573 件です。
 
-東京都の住居表示データ 1,752,573 件を、空のテーブルに取り込む時間：
+## 確認できたこと
+
+1. **テーブルを丸ごと入れ替えるなら、ローダーが最速。ORM は遅いので、生の SQL を使う**
+2. **差分を見て更新するときも、生の SQL を使う**
+3. **大量のデータを部分一致で探すなら、元の DB ではなく、検索用のデータを作る**（例として Elasticsearch）
+
+### 1. テーブルの入れ替え：ローダーが最速、ORM より生の SQL
+
+空のテーブルに全件を取り込む時間：
 
 | 版 | やり方 | 全件の時間 | 速度 | 最大メモリ |
 |---|---|---|---|---|
 | [v1](docs/v1-naive.md) | CSV を丸ごと読み込み、1 件ずつ INSERT | 約 5 時間（計算上） | 88 件/秒 | 1,453 MB |
-| [v2](docs/v2-stream.md) | ストリーミング処理 + 1,000 件ずつまとめて INSERT（Prisma） | 約 7 分（415.26 秒） | 4,220 件/秒 | 562 MB |
-| [v5](docs/v5-query.md) | v2 と同じ流れで、Prisma を使わず mariadb ドライバーの `query` で INSERT | 約 51 秒（50.97 秒） | 34,383 件/秒 | 136 MB |
-| [v3](docs/v3-load-data.md) | `LOAD DATA LOCAL INFILE` で DB に直接読み込ませる | **約 15 秒（15.11 秒）** | 115,976 件/秒 | 154 MB |
+| [v2](docs/v2-stream.md) | 少しずつ読み、1,000 件ずつまとめて INSERT（ORM：Prisma） | 約 7 分（415.26 秒） | 4,220 件/秒 | 562 MB |
+| [v5](docs/v5-query.md) | v2 と同じ流れで、ORM を使わず生の SQL で INSERT | 約 51 秒（50.97 秒） | 34,383 件/秒 | 136 MB |
+| [v3](docs/v3-load-data.md) | ローダー（`LOAD DATA LOCAL INFILE`。DB にファイルを直接読ませる） | **約 15 秒（15.11 秒）** | 115,976 件/秒 | 154 MB |
 
-- v1 は全件を測っていません。10,000 件の計測結果からの計算です（[v1 の説明](docs/v1-naive.md)を参照）
+- 同じ「1,000 件ずつの INSERT」でも、ORM（v2）は生の SQL（v5）より約 8 倍遅くなりました。原因は、Prisma が `createMany` のたびに、SQL の組み立て手順を作り直していたことです（[v5 の説明](docs/v5-query.md)）
+- v1 は全件を測っていません。10,000 件の計測結果からの計算です
 - v2 と v5 は Node.js のヒープ上限を 512 MB にして測った値です
-- v5 は v4 の後に作ったので番号が後ですが、v2 と比べやすいよう v2 の次に並べています
+- 番号は作った順です。v5 は v4 の後に作りましたが、v2 と比べやすいよう v2 の次に並べています
 - v2・v3・v5 で取り込んだテーブルは、`CHECKSUM TABLE`（テーブルの中身から計算する値）が同じ値（967527444）になり、中身が一致することを確かめています
 
-既存のテーブルに差分だけを反映する [v4](docs/v4-sync.md)（`INSERT ... ON DUPLICATE KEY UPDATE`、1,000 件ずつ）：
+### 2. 差分の更新：生の SQL を使う
+
+ローダーは「丸ごと入れ替える」ための道具なので、既存のテーブルに差分だけを反映するときは使えません。[v4](docs/v4-sync.md) では、CSV と DB を主キーの順に読み比べて、差分だけを生の SQL（`INSERT ... ON DUPLICATE KEY UPDATE`、1,000 件ずつ）で反映します。
 
 | 場面 | 時間 |
 |---|---|
@@ -30,28 +38,53 @@ v5 では、v2 が遅い原因を確かめるため、v2 の INSERT の部分だ
 | 全件を更新 | 93.05 秒 |
 | 全件を追加（空のテーブルから） | 66.38 秒 |
 
-v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探し方は [docs/logs.md](docs/logs.md) にあります。
+- 空のテーブルに全件を追加する場面では 66.38 秒で、同じ 1,000 件ずつの INSERT でも、ORM を使う v2（415.26 秒）より約 6 倍速くなりました
+- DB を主キーの順に読むとき、`(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなりました。`a > ? OR (a = ? AND b > ?) OR ...` に展開して直しています
+- CSV の件数が DB より 10% 以上少ないときは、何もせずに止めます。CSV が途中で切れていたときに、大量に削除してしまわないためです（`--max-delete-ratio` で変えられます）
+- v4 が出すログ（実行ログ・変更ログ・SQL ログ）の中身と探し方は [docs/logs.md](docs/logs.md) にあります
 
-DB から Elasticsearch の検索用インデックスを作り直す [es:index](docs/es-index.md)（5,000 件ずつ Bulk API で送る）：全件 1,752,573 件で約 57 秒（56.81 秒）、最大メモリ 370 MB。
+### 3. 検索：検索用のデータを作る
+
+Web アプリ（[abr-web](#web-アプリabr-web)）の検索は `city LIKE '%町田%'` のような部分一致です。前に `%` が付く LIKE は MySQL のインデックスでは速くならないので、毎回 175 万行を全部読みます。
+そこで、DB のデータを Elasticsearch（全文検索のサーバー）に入れる変換バッチ [es:index](docs/es-index.md) を作りました。正本は MySQL のままで、Elasticsearch はいつでも作り直せる検索用のコピーです。
+
+| | 時間 | 最大メモリ |
+|---|---|---|
+| 全件 1,752,573 件のインデックスを作り直す | 約 57 秒（56.81 秒） | 370 MB |
+
+検索が速くなった効果は、[abr-web](#web-アプリabr-web) の README に載せています。
+
+- 文字の比べ方が MySQL と Elasticsearch で違うため、そのままでは当たる件数が合いませんでした（例：丁目「3」で MySQL は「３丁目」に当たるが、Elasticsearch は 0 件）。入れる側と探す側の両方で文字をそろえて合わせています（[es:index の説明](docs/es-index.md)）
+
+## 見どころ
+
+計測と調査で見つけた問題と、その対処です。
+
+| 見つけた問題 | 対処 | 版 |
+|---|---|---|
+| 少しずつ読んでいるのに、メモリが 2 GB を超えた。原因は、Prisma のデバッグ用部品が、ログを出さない設定でも直近 100 回分の SQL と引数を取っておく作りだったこと | ヒープスナップショットで原因を特定し、`clearLogs()` で毎回消す | [v2](docs/v2-stream.md) |
+| v2 と v5 は同じ 1,000 件ずつの INSERT だが、v2 は約 8 倍遅い。原因は、`createMany` のたびに Prisma が 1,000 件分のデータを含む大きな JSON から SQL の組み立て手順を作り直していたこと（`createMany` ではキャッシュされない） | performance_schema で MySQL の中と外の時間を切り分け、CPU プロファイルで Prisma の中の原因を特定。Prisma を使わず `query` で送る v5 で確かめる | [v5](docs/v5-query.md) |
+| ファイル全体を 1 回の `LOAD DATA` で送ると、DB に断られる（`max_allowed_packet` を超える） | CSV を行の切れ目で区切って、何回かに分けて送る | [v3](docs/v3-load-data.md) |
+| 配布 CSV の改行が CRLF で、`LOAD DATA` だと最後の列に `\r` が残る | 行の区切りを `'\r\n'` と指定する | [v3](docs/v3-load-data.md) |
+| 配布 CSV が、主キー順に並んでいない（374 か所） | 比べる前に毎回並べ替え、読みながら順番もチェックする | [v4](docs/v4-sync.md) |
+| キーセット方式で `(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなる | `a > ? OR (a = ? AND b > ?) OR ...` に展開する | [v4](docs/v4-sync.md) |
+| MySQL と Elasticsearch で、同じ検索の件数が合わない。MySQL の照合順序（`utf8mb4_unicode_ci`）は全角と半角、カタカナとひらがななどを同じ文字として扱うが、Elasticsearch はそのまま比べるため | 入れる側と探す側の両方で、同じ規則で文字をそろえる。互換漢字はそろえない（MySQL が別の文字として扱うため）。914 通りの検索で件数を比べて確かめた | [es:index](docs/es-index.md) |
+
+## Web アプリ（abr-web）
+
+このバッチで作った DB と Elasticsearch を検索・編集する Web アプリです。同じ画面を 5 つの言語・フレームワークで作っています。
+
+- [abr-web-rails](https://github.com/yamafifa/abr-web-rails)（Ruby on Rails）
+- [abr-web-laravel](https://github.com/yamafifa/abr-web-laravel)（Laravel）
+- [abr-web-symfony](https://github.com/yamafifa/abr-web-symfony)（Symfony）
+- [abr-web-spring](https://github.com/yamafifa/abr-web-spring)（Spring Boot）
+- [abr-web-ts](https://github.com/yamafifa/abr-web-ts)（Next.js）
 
 ## 計測環境
 
 - CPU：AMD Ryzen 7 5700X（8 コア 16 スレッド）
 - メモリ：WSL2 に割り当てられたメモリ 31 GB
 - Windows の WSL2 上で Node.js 22 を実行し、MySQL 8.4 は Rancher Desktop（Docker）で実行
-
-## 見どころ
-
-計測と調査で見つけた問題と、その対処です。詳しくは各版の説明（`docs/`）にあります。
-
-| 見つけた問題 | 対処 | 版 |
-|---|---|---|
-| 少しずつ読んでいるのに、メモリが 2 GB を超えた。原因は、Prisma のデバッグ用部品が、ログを出さない設定でも直近 100 回分の SQL と引数を取っておく作りだったこと | ヒープスナップショットで原因を特定し、`clearLogs()` で毎回消す | [v2](docs/v2-stream.md) |
-| ファイル全体を 1 回の `LOAD DATA` で送ると、DB に断られる（`max_allowed_packet` を超える） | CSV を行の切れ目で区切って、何回かに分けて送る | [v3](docs/v3-load-data.md) |
-| 配布 CSV の改行が CRLF で、`LOAD DATA` だと最後の列に `\r` が残る | 行の区切りを `'\r\n'` と指定する | [v3](docs/v3-load-data.md) |
-| 配布 CSV が、主キー順に並んでいない（374 か所） | 比べる前に毎回並べ替え、読みながら順番もチェックする | [v4](docs/v4-sync.md) |
-| キーセット方式で `(a, b, c, d, e) > (...)` と書くと、1 ページの読み込みが 1,000 倍以上遅くなる | `a > ? OR (a = ? AND b > ?) OR ...` に展開する | [v4](docs/v4-sync.md) |
-| v2 と v5 は同じ 1,000 件ずつの INSERT だが、v2 は約 8 倍遅い。原因は、`createMany` のたびに Prisma が 1,000 件分のデータを含む大きな JSON から SQL の組み立て手順を作り直していたこと（`createMany` ではキャッシュされない） | performance_schema で MySQL の中と外の時間を切り分け、CPU プロファイルで Prisma の中の原因を特定。Prisma を使わず `query` で送る v5 で確かめる | [v5](docs/v5-query.md) |
 
 ## 使うデータ
 
@@ -68,7 +101,7 @@ DB から Elasticsearch の検索用インデックスを作り直す [es:index]
 ```bash
 npm install
 cp .env.example .env     # DB の接続先（compose.yaml の MySQL に合わせてある）
-npm run db:up            # MySQL 8.4 を起動（ポート 3307）
+npm run db:up            # MySQL 8.4（ポート 3307）・Elasticsearch・Kibana を起動
 npm run download         # データを data/ にダウンロード
 npx prisma generate      # Prisma のクライアントを作る
 npx prisma migrate deploy   # テーブルを作る
@@ -86,8 +119,6 @@ npm run sync:v4 -- data/test_modified.csv
 npm run es:index                        # DB から Elasticsearch のインデックスを作り直す
 ```
 
-- `npm run db:up` で、MySQL と一緒に Elasticsearch 9.5.5（`127.0.0.1:9200`）と Kibana 9.5.5（`127.0.0.1:5601`、管理画面）も起動します。Elasticsearch は手元専用なので、ログインを無くしています
-
 オプション：
 
 - v2：`--batch 件数`（1 回にまとめる件数、既定 1,000）
@@ -96,9 +127,12 @@ npm run es:index                        # DB から Elasticsearch のインデ�
 - v5：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 - es:index：`--batch 件数`（1 回の Bulk API で送る件数、既定 5,000）
 
-DB のパスワードについて：[compose.yaml](compose.yaml) と `.env.example` に書いてあるパスワード（`abr`、`root`）は、手元で試すための決め打ちの値です。MySQL は手元の PC からだけ接続できるようにしてあります（`127.0.0.1:3307`）。本番や共有の DB には使わないでください。
+### 注意
 
-DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_sha2_password`）では、MySQL を起動し直した直後の最初のログインに、暗号化した通信（TLS）かサーバーの公開鍵が必要です。このリポジトリでは TLS を使わないので、接続設定で `allowPublicKeyRetrieval: true`（公開鍵をサーバーから受け取る）を指定しています（[src/lib/db.ts](src/lib/db.ts)、[src/lib/mariadb.ts](src/lib/mariadb.ts)）。手元の Docker の DB に接続する前提の設定です。
+- **パスワード**：[compose.yaml](compose.yaml) と `.env.example` に書いてあるパスワード（`abr`、`root`）は、手元で試すための決め打ちの値です。本番や共有の DB には使わないでください
+- **接続できる範囲**：MySQL（`127.0.0.1:3307`）、Elasticsearch 9.5.5（`127.0.0.1:9200`）、Kibana 9.5.5（`127.0.0.1:5601`、Elasticsearch の管理画面）は、どれも手元の PC からだけ接続できるようにしてあります。Elasticsearch は手元専用なので、ログインを無くしています
+- **メモリ**：Elasticsearch と Kibana で、合わせて約 2.5 GB 使います。使わないときは `docker compose stop es kibana` で止められます
+- **DB の接続設定**：MySQL 8.4 の標準のログイン方式（`caching_sha2_password`）では、MySQL を起動し直した直後の最初のログインに、暗号化した通信（TLS）かサーバーの公開鍵が必要です。このリポジトリでは TLS を使わないので、`allowPublicKeyRetrieval: true`（公開鍵をサーバーから受け取る）を指定しています（[src/lib/db.ts](src/lib/db.ts)、[src/lib/mariadb.ts](src/lib/mariadb.ts)）
 
 ## ファイル構成
 
@@ -114,7 +148,7 @@ DB の接続について：MySQL 8.4 の標準のログイン方式（`caching_s
 | [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
 | [scripts/download.sh](scripts/download.sh) | データのダウンロード |
 | [scripts/make-test-csv.sh](scripts/make-test-csv.sh) | v4 の確認用 CSV を作る |
-| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定）、Elasticsearch 9.5.5、Kibana 9.5.5。どれも手元の PC からだけ接続できるようにポートを `127.0.0.1` に限定 |
+| [compose.yaml](compose.yaml) | MySQL 8.4（`LOAD DATA LOCAL` を使えるよう `--local-infile=1` を指定）、Elasticsearch 9.5.5、Kibana 9.5.5 |
 | [docs/](docs/) | 各版の詳しい説明（[v1](docs/v1-naive.md)・[v2](docs/v2-stream.md)・[v3](docs/v3-load-data.md)・[v4](docs/v4-sync.md)・[v5](docs/v5-query.md)・[es:index](docs/es-index.md)）と[ログの説明](docs/logs.md) |
 
 ## 技術
