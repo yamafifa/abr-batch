@@ -10,7 +10,7 @@ description: abr-batch（ABR 住所データを MySQL に取り込むバッチ�
 - データ：ABR 東京都 住居表示-住居マスター `data/mt_rsdtdsp_rsdt_pref13.csv`（1,752,573 件、約 150 MB、UTF-8、**改行 CRLF**、22 列、主キー 5 列）
 - DB：MySQL 8.4（`compose.yaml`、ポート 3307、`--local-infile=1`）。接続先は `.env` の `DATABASE_URL`
 - 版：v1 `import:naive` / v2 `import:v2`（Prisma createMany）/ v3 `import:v3`（LOAD DATA）/ v4 `sync:v4`（差分更新）/ v5 `import:v5`（query で INSERT）
-- Elasticsearch 9.5.5（`127.0.0.1:9200`、ログイン無し）と Kibana（`127.0.0.1:5601`）も compose.yaml にある。`es:index` で DB から検索用インデックスを作り直す（別名 `rsdt` → `rsdt_日時`）。AP（abr-web の 5 つの版すべての `/es`）が使う
+- Elasticsearch 9.5.5（`127.0.0.1:9200`、ログイン無し）と Kibana（`127.0.0.1:5601`）も compose.yaml にある。`es:index` で DB から検索用インデックスを作り直す（別名 `rsdt` → `rsdt_日時`）。Web アプリ（abr-web の 5 つの版すべての `/es`）が使う
 - v1・v2・v3・v5 は実行前にテーブルを空にする。作業の最後は `npm run import:v3`（約 15 秒）で元のデータに戻す
 
 ## 計測のやり方
@@ -72,4 +72,4 @@ for f in README.md docs/*.md; do d=$(dirname $f); grep -oE '\]\([^)#:]+' $f | se
 
 - ユーザーの了解を取ってから、コミットと push をする。内容が分かれるときは、分けてコミットする
 - コミットメッセージは日本語。最後に `Co-Authored-By` の行を付ける
-- リポジトリは GitHub の非公開リポジトリ。`data/`、`logs/`、`.env` は Git に入れない
+- リポジトリは GitHub の**公開**リポジトリ。`data/`、`logs/`、`.env` は Git に入れない

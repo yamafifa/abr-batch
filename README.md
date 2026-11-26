@@ -45,7 +45,7 @@
 
 ### 3. 検索：検索用のデータを作る
 
-Web アプリ（[abr-web](#web-アプリabr-web)）の検索は `city LIKE '%町田%'` のような部分一致です。前に `%` が付く LIKE は MySQL のインデックスでは速くならないので、毎回 175 万行を全部読みます。
+Web アプリ（[abr-web](#web-アプリabr-web)）の検索は `city LIKE '%町田%'` のような部分一致です。前に `%` が付く LIKE は MySQL のインデックスが効かないので、毎回約 175 万行をすべて読みます。
 そこで、DB のデータを Elasticsearch（全文検索のサーバー）に入れる変換バッチ [es:index](docs/es-index.md) を作りました。正本は MySQL のままで、Elasticsearch はいつでも作り直せる検索用のコピーです。
 
 | | 時間 | 最大メモリ |
