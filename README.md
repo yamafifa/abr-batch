@@ -157,8 +157,11 @@ TypeScript / Node.js 22 以降 / Prisma 7 / mariadb（Node.js 用の MySQL ド�
 
 ## 出典・ライセンス
 
-このリポジトリで扱うデータは、次のデータをこのリポジトリの作者が加工して作成しています。
+このリポジトリのコードは [MIT License](LICENSE) です。
 
-- 出典：「[アドレス・ベース・レジストリ](https://www.digital.go.jp/policies/base_registry_address)」（デジタル庁）を加工して作成
+使うデータは次のとおりです。MIT License は、このデータには当てはまりません。
+
+- 出典：「[アドレス・ベース・レジストリ](https://www.digital.go.jp/policies/base_registry_address)」（デジタル庁）
 - 利用規約：[公共データ利用規約（第1.0版）（PDL1.0）](https://www.digital.go.jp/policies/base_registry_address_tos)
-- データそのものはリポジトリに含めていません（`npm run download` で取得します）
+- データそのものはリポジトリに含めていません。`npm run download` で、デジタル庁が配布している元のデータをそのまま取得します
+- このリポジトリのバッチで DB・Elasticsearch に入れたデータと、v4 の確認用 CSV（`scripts/make-test-csv.sh` で作る）は、このデータを手元で加工したものです。README と docs に載せた件数・計測結果・例は、このデータをもとに yamafifa が作成したものです
