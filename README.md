@@ -157,8 +157,8 @@ TypeScript / Node.js 22 以降 / Prisma 7 / mariadb（Node.js 用の MySQL ド�
 
 ## 出典・ライセンス
 
-このリポジトリで扱うデータは、次のデータを加工して作成しています。
+このリポジトリで扱うデータは、次のデータをこのリポジトリの作者が加工して作成しています。
 
-- 出典：[デジタル庁 アドレス・ベース・レジストリ](https://www.digital.go.jp/policies/base_registry_address)
-- ライセンス：[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja)
+- 出典：「[アドレス・ベース・レジストリ](https://www.digital.go.jp/policies/base_registry_address)」（デジタル庁）を加工して作成
+- 利用規約：[公共データ利用規約（第1.0版）（PDL1.0）](https://www.digital.go.jp/policies/base_registry_address_tos)
 - データそのものはリポジトリに含めていません（`npm run download` で取得します）
