@@ -117,6 +117,7 @@ bash scripts/make-test-csv.sh           # v4 の確認用に、一部を変え�
 npm run sync:v4 -- data/test_modified.csv
 
 npm run es:index                        # DB から Elasticsearch のインデックスを作り直す
+npm run es:verify                       # MySQL と Elasticsearch で、同じ検索の件数が同じか比べる（約 7 分）
 ```
 
 オプション：
@@ -126,6 +127,7 @@ npm run es:index                        # DB から Elasticsearch のインデ�
 - v4：`--dry-run`（DB を変えずにログだけ出す）、`--batch 件数`（既定 1,000）、`--max-delete-ratio 割合`（既定 0.1）、`--force`（安全装置を無視する）
 - v5：`--batch 件数`（1 回にまとめる件数、既定 1,000）
 - es:index：`--batch 件数`（1 回の Bulk API で送る件数、既定 5,000）
+- es:verify：`--seed 数`（検索語を選ぶ乱数の種、既定 1）、`--pairs 個数`（項目ごとに選ぶ 2 文字の並びの数、既定 300）
 
 ### 注意
 
@@ -144,6 +146,7 @@ npm run es:index                        # DB から Elasticsearch のインデ�
 | [src/sync-v4.ts](src/sync-v4.ts) | v4：差分更新（mariadb ドライバー） |
 | [src/import-v5.ts](src/import-v5.ts) | v5：ストリーミング処理 + まとめて INSERT（mariadb ドライバーの `query`） |
 | [src/es-index.ts](src/es-index.ts) | es:index：DB から Elasticsearch の検索用インデックスを作り直す |
+| [src/es-verify.ts](src/es-verify.ts) | es:verify：MySQL の LIKE と Elasticsearch で、同じ検索の件数が同じか比べる |
 | [src/lib/](src/lib/) | 共通部品（DB 接続、Elasticsearch の呼び出し、検索用の文字そろえ、列の定義、計測、実行ログ、SQL ログ、日本時間） |
 | [prisma/schema.prisma](prisma/schema.prisma) | テーブルの定義 |
 | [scripts/download.sh](scripts/download.sh) | データのダウンロード |
