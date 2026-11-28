@@ -1,6 +1,7 @@
 /**
  * es:verify：MySQL の LIKE と Elasticsearch の wildcard で、同じ検索の件数が同じになるか比べる
  * - AP の DB 検索（LIKE '%…%'）と Elasticsearch 検索（fold でそろえてから wildcard）を、同じ検索語で数えて比べる
+ * - AP と同じく、検索語の半角カナは全角カナにしてから探す（zenkakuKana）
  * - 検索語は、検索する項目（市区町村・町字・丁目）ごとに作る
  *   - その項目の値に出てくる文字すべて
  *   - 2 文字の並びから、無作為に --pairs 個（既定 300）。乱数の種（--seed、既定 1）が同じなら、DB が同じ限り同じ検索語になる
@@ -59,6 +60,13 @@ function sample<T>(list: T[], n: number, rand: () => number): T[] {
   return a.slice(0, n);
 }
 
+/**
+ * 半角カナ（U+FF61〜U+FF9F）だけを全角カナにする（「ﾊﾟ」→「パ」）。AP は検索条件を受け取るときに、DB 検索・Elasticsearch 検索の両方でこれをかける
+ * MySQL は「ﾊﾟ」を「ﾊ」と「ﾟ」の 2 文字として探すので、かけないと Elasticsearch（fold で 1 文字にする）と件数が合わない。
+ * AP（abr-web-rails・abr-web-laravel・abr-web-symfony・abr-web-spring・abr-web-ts の RsdtListQuery・search-params）と同じ処理。直すときはすべてを直す
+ */
+const zenkakuKana = (s: string) => s.replace(/[｡-ﾟ]+/g, (m) => m.normalize("NFKC"));
+
 /** LIKE の特別な文字（% _ \）を、ただの文字として探す */
 const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 /** wildcard の特別な文字（* ? \）を、ただの文字として探す */
@@ -113,8 +121,10 @@ try {
 
   for (const [group, cols] of GROUPS) {
     for (const t of await terms(conn, cols, rand)) {
-      const my = await mysqlCount(conn, cols, t);
-      const e = await esCount(cols, t);
+      // AP と同じく、検索条件の半角カナを全角カナにしてから、両方で探す
+      const q = zenkakuKana(t);
+      const my = await mysqlCount(conn, cols, q);
+      const e = await esCount(cols, q);
       total++;
       lines.push(`${group}\t${t}\t${my}\t${e}\t${my === e ? 1 : 0}`);
       if (my !== e) {

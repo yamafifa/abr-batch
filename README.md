@@ -117,7 +117,7 @@ bash scripts/make-test-csv.sh           # v4 の確認用に、一部を変え�
 npm run sync:v4 -- data/test_modified.csv
 
 npm run es:index                        # DB から Elasticsearch のインデックスを作り直す
-npm run es:verify                       # MySQL と Elasticsearch で、同じ検索の件数が同じか比べる（約 7 分）
+npm run es:verify                       # MySQL と Elasticsearch で、同じ検索の件数が同じか比べる（7〜12 分）
 ```
 
 オプション：
